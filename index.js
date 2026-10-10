@@ -1,6 +1,7 @@
-import makeWASocket, {
+import baileysPkg, {
   useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, jidNormalizedUser
 } from '@whiskeysockets/baileys';
+const makeWASocket = baileysPkg.default || baileysPkg;
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
