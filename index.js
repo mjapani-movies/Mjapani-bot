@@ -272,13 +272,22 @@ async function start() {
     }
     if (connection === 'close') {
       const code = lastDisconnect?.error?.output?.statusCode;
+      console.log(`Connection closed: status=${code} msg=${lastDisconnect?.error?.message}`);
+      const restart = (ms) => setTimeout(() => start().catch(e => console.log('start error', e.message)), ms);
+
+      // Pairing not completed yet: stale half-made creds would be rejected, so start clean and issue a new code
+      if (!sock.authState.creds.account && PAIRING_NUMBER) {
+        await wipeSession();
+        console.log('Pairing haikukamilika. Inaomba code mpya...');
+        return restart(3000);
+      }
       if (code === DisconnectReason.loggedOut) {
         console.log('⚠️ WhatsApp imetoa session (logged out). Inafuta session ya zamani.');
         await wipeSession();
-        if (PAIRING_NUMBER) setTimeout(() => start().catch(e => console.log('start error', e.message)), 3000);
+        if (PAIRING_NUMBER) restart(3000);
         else console.log('Tengeneza SESSION_ID mpya kwenye tovuti ya session, uiweke kwenye Variables, kisha Redeploy.');
       } else {
-        setTimeout(() => start().catch(e => console.log('start error', e.message)), reconnectDelay);
+        restart(reconnectDelay);
         reconnectDelay = Math.min(reconnectDelay * 2, 60000);
       }
     }
