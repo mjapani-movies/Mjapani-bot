@@ -1,7 +1,15 @@
 import baileysPkg, {
-  useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, jidNormalizedUser, Browsers
-} from '@whiskeysockets/baileys';
+  useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, jidNormalizedUser, Browsers, fetchLatestWaWebVersion
+} from 'baileys';
 const makeWASocket = baileysPkg.default || baileysPkg;
+
+// WhatsApp rejects linking from outdated client versions, so use the live WA Web version when possible
+async function getWaVersion() {
+  try { const r = await fetchLatestWaWebVersion(); if (r?.version) return r.version; } catch {}
+  const { version } = await fetchLatestBaileysVersion();
+  return version;
+}
+
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
@@ -241,7 +249,7 @@ async function wipeSession() {
 async function start() {
   bootstrapSessionFromEnv();
   const { state: auth, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
-  const { version } = await fetchLatestBaileysVersion();
+  const version = await getWaVersion();
   const sock = makeWASocket({
     version, auth, logger: pino({ level: 'silent' }),
     printQRInTerminal: false,
