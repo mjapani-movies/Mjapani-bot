@@ -1,10 +1,12 @@
 import baileysPkg, {
-  useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, jidNormalizedUser
+  useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, jidNormalizedUser, Browsers
 } from '@whiskeysockets/baileys';
 const makeWASocket = baileysPkg.default || baileysPkg;
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
+import http from 'http';
+import crypto from 'crypto';
 
 // ================= CONFIG =================
 const DATA = process.env.DATA_DIR || './data';
@@ -12,6 +14,7 @@ const TZ = process.env.TZ || 'Africa/Dar_es_Salaam';
 const PAIRING_NUMBER = (process.env.PAIRING_NUMBER || '').replace(/\D/g, '');
 const SESSION_ID_ENV = process.env.SESSION_ID || ''; // njia mbadala ya kuingiza session bila pairing
 const GEMINI_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 const BOT_NAME = 'MJAPANI BOT';
 const OWNER_TAG = process.env.OWNER_NAME || 'Mmiliki';
@@ -20,6 +23,8 @@ const WAIT_MS = 4000;
 
 const SESSION_DIR = path.join(DATA, 'session');
 const CREDS_FILE = path.join(SESSION_DIR, 'creds.json');
+const SID_HASH_FILE = path.join(DATA, '.sid_hash');
+const MAX_MSG_AGE_S = 300; // ignore messages older than 5 minutes (offline backlog)
 const MENU_IMG = path.join(process.cwd(), 'media', 'owner.jpg');
 
 fs.mkdirSync(SESSION_DIR, { recursive: true });
@@ -40,16 +45,23 @@ let history = load(histFile, {});
 
 // ================= SESSION ID (paste-to-deploy) =================
 function bootstrapSessionFromEnv() {
-  if (SESSION_ID_ENV && !fs.existsSync(CREDS_FILE)) {
-    try {
-      const raw = SESSION_ID_ENV.replace(/^MJAPANI~/, '');
-      const json = Buffer.from(raw, 'base64').toString('utf8');
-      JSON.parse(json);
-      fs.writeFileSync(CREDS_FILE, json);
-      console.log('✅ Session imewekwa kutoka SESSION_ID.');
-    } catch (e) {
-      console.log('⚠️ SESSION_ID si sahihi, nitaendelea na pairing code. (' + e.message + ')');
-    }
+  if (!SESSION_ID_ENV) return;
+  // Apply SESSION_ID only when it is new or changed, so a new ID always replaces an old session
+  const hash = crypto.createHash('sha256').update(SESSION_ID_ENV).digest('hex');
+  let prev = '';
+  try { prev = fs.readFileSync(SID_HASH_FILE, 'utf8').trim(); } catch {}
+  if (prev === hash) return;
+  try {
+    const raw = SESSION_ID_ENV.trim().replace(/^MJAPANI~/, '');
+    const json = Buffer.from(raw, 'base64').toString('utf8');
+    JSON.parse(json);
+    fs.rmSync(SESSION_DIR, { recursive: true, force: true });
+    fs.mkdirSync(SESSION_DIR, { recursive: true });
+    fs.writeFileSync(CREDS_FILE, json);
+    fs.writeFileSync(SID_HASH_FILE, hash);
+    console.log('✅ Session imewekwa kutoka SESSION_ID.');
+  } catch (e) {
+    console.log('⚠️ SESSION_ID si sahihi. (' + e.message + ')');
   }
 }
 
@@ -97,7 +109,7 @@ async function askAI(chat) {
   const turns = buildTurns(chat);
   if (!turns.length) return null;
   if (GEMINI_KEY) {
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`, {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_KEY}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: systemPrompt() }] },
@@ -106,6 +118,7 @@ async function askAI(chat) {
       })
     });
     const j = await r.json();
+    if (!r.ok) { console.log('Gemini error', r.status, JSON.stringify(j.error || j).slice(0, 300)); return null; }
     return j.candidates?.[0]?.content?.parts?.map(p => p.text).join('').trim() || null;
   }
   if (ANTHROPIC_KEY) {
@@ -118,6 +131,7 @@ async function askAI(chat) {
       })
     });
     const j = await r.json();
+    if (!r.ok) { console.log('Anthropic error', r.status, JSON.stringify(j.error || j).slice(0, 300)); return null; }
     return j.content?.map(c => c.text || '').join('').trim() || null;
   }
   console.log('Hakuna API key (GEMINI_API_KEY au ANTHROPIC_API_KEY)');
@@ -216,31 +230,57 @@ const textOf = (m) => m.message?.conversation || m.message?.extendedTextMessage?
 
 const timers = new Map();
 
+let sockRef = null;
+let reconnectDelay = 3000;
+
+async function wipeSession() {
+  try { fs.rmSync(SESSION_DIR, { recursive: true, force: true }); } catch {}
+  fs.mkdirSync(SESSION_DIR, { recursive: true });
+}
+
 async function start() {
   bootstrapSessionFromEnv();
   const { state: auth, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
   const { version } = await fetchLatestBaileysVersion();
   const sock = makeWASocket({
     version, auth, logger: pino({ level: 'silent' }),
-    printQRInTerminal: false, browser: [BOT_NAME, 'Chrome', '1.0.0'],
-    syncFullHistory: false
+    printQRInTerminal: false,
+    browser: Browsers.ubuntu('Chrome'), // standard identity, required for pairing codes to be accepted
+    syncFullHistory: false, markOnlineOnConnect: false
   });
+  sockRef = sock;
   sock.ev.on('creds.update', saveCreds);
 
-  if (!sock.authState.creds.registered) {
-    if (!PAIRING_NUMBER) console.log('Weka PAIRING_NUMBER (mfano 255712345678) au SESSION_ID kwenye Variables.');
-    else setTimeout(async () => {
-      try { console.log('\n===== PAIRING CODE:', await sock.requestPairingCode(PAIRING_NUMBER), '=====\n'); }
-      catch (e) { console.log('Pairing error', e.message); }
-    }, 4000);
-  }
+  let pairingAsked = false;
+  sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+    // "qr" means the handshake is ready: the right moment to request a pairing code
+    if (qr && !sock.authState.creds.registered && !pairingAsked) {
+      if (!PAIRING_NUMBER) {
+        console.log('Weka SESSION_ID (au PAIRING_NUMBER) kwenye Railway Variables. Pata SESSION_ID kwenye tovuti ya session.');
+      } else {
+        pairingAsked = true;
+        try {
+          const code = await sock.requestPairingCode(PAIRING_NUMBER);
+          console.log('\n===== PAIRING CODE:', code.match(/.{1,4}/g).join('-'), '=====\n');
+        } catch (e) { console.log('Pairing error', e.message); pairingAsked = false; }
+      }
+    }
 
-  sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
-    if (connection === 'open') console.log(`✅ ${BOT_NAME} imeunganishwa`);
+    if (connection === 'open') {
+      reconnectDelay = 3000;
+      console.log(`✅ ${BOT_NAME} imeunganishwa kama ${sock.user?.id}`);
+    }
     if (connection === 'close') {
       const code = lastDisconnect?.error?.output?.statusCode;
-      if (code === DisconnectReason.loggedOut) console.log('Umetoka (logged out). Futa folda ya session ujaribu tena.');
-      else setTimeout(start, 3000);
+      if (code === DisconnectReason.loggedOut) {
+        console.log('⚠️ WhatsApp imetoa session (logged out). Inafuta session ya zamani.');
+        await wipeSession();
+        if (PAIRING_NUMBER) setTimeout(() => start().catch(e => console.log('start error', e.message)), 3000);
+        else console.log('Tengeneza SESSION_ID mpya kwenye tovuti ya session, uiweke kwenye Variables, kisha Redeploy.');
+      } else {
+        setTimeout(() => start().catch(e => console.log('start error', e.message)), reconnectDelay);
+        reconnectDelay = Math.min(reconnectDelay * 2, 60000);
+      }
     }
   });
 
@@ -249,13 +289,19 @@ async function start() {
     for (const m of messages) {
       try {
         const jid = m.key.remoteJid;
-        if (!jid || jid.endsWith('@g.us') || jid === 'status@broadcast' || jid.endsWith('@newsletter')) continue;
+        if (!jid || jid.endsWith('@g.us') || jid === 'status@broadcast' || jid.endsWith('@newsletter') || jid.endsWith('@broadcast')) continue;
+        const ts = Number(m.messageTimestamp || 0);
+        if (ts && Date.now() / 1000 - ts > MAX_MSG_AGE_S) continue;
         const text = textOf(m).trim();
         if (!text) continue;
+
         const me = jidNormalizedUser(sock.user.id);
+        const meLid = sock.user.lid ? jidNormalizedUser(sock.user.lid) : null;
+        const nj = jidNormalizedUser(jid);
+        const isSelfChat = nj === me || (meLid && nj === meLid);
 
         // Amri za mmiliki: andika kwenye chat yako mwenyewe ("Message yourself")
-        if (m.key.fromMe && jidNormalizedUser(jid) === me) {
+        if (m.key.fromMe && isSelfChat) {
           if (text.startsWith('!')) await handleCommand(sock, jid, text);
           continue;
         }
@@ -291,4 +337,15 @@ async function start() {
     }
   });
 }
-start();
+
+// ================= KEEP-ALIVE + HEALTH =================
+// Without this, Node exits when the socket closes and Railway shows "Completed".
+http.createServer((_req, res) => {
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ bot: BOT_NAME, connected: !!sockRef?.user, enabled: state.enabled }));
+}).listen(process.env.PORT || 8080, '0.0.0.0');
+
+process.on('unhandledRejection', e => console.log('unhandledRejection:', e?.message || e));
+process.on('uncaughtException', e => console.log('uncaughtException:', e?.message || e));
+
+start().catch(e => console.log('start error', e.message));
