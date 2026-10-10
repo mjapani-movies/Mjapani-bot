@@ -1,12 +1,12 @@
 {
   "name": "mjapani-bot",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "type": "module",
   "main": "index.js",
   "scripts": { "start": "node index.js" },
   "engines": { "node": ">=20" },
   "dependencies": {
-    "@whiskeysockets/baileys": "6.7.18",
+    "@whiskeysockets/baileys": "6.7.24",
     "pino": "^9.0.0"
   }
 }
