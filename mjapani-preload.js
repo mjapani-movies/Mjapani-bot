@@ -48,3 +48,20 @@ for (const fn of ['request', 'get']) {
 }
 
 console.log('[mjapani] session source: ' + TARGET)
+
+// Node's built-in fetch (undici) does not go through the https module, so patch it too.
+if (typeof globalThis.fetch === 'function') {
+  const origFetch = globalThis.fetch
+  globalThis.fetch = function (input, init) {
+    try {
+      const isReq = typeof input === 'object' && input !== null && !(input instanceof URL) && input.url
+      const url = new URL(isReq ? input.url : String(input))
+      if (url.hostname === FROM && SESSION_PATH.test(url.pathname)) {
+        url.hostname = TARGET_HOST
+        if (TARGET_PORT) url.port = TARGET_PORT
+        input = isReq ? new Request(url, input) : url.href
+      }
+    } catch (e) {}
+    return origFetch.call(this, input, init)
+  }
+}
