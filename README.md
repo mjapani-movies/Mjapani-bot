@@ -1,7 +1,6 @@
-# MJAPANI BOT
-
+# MJAPANI MD  BOT
+Most powerfull whatsapp BOT in 2026 CREATED BY MJAPANI.
 WhatsApp bot with plugins, group tools, downloads and more.
-Based on [Levanter](https://github.com/lyfe00011/levanter) by LyFE (MIT license). Session handling and deployment are customised for MJAPANI.
 
 ## 1. GET SESSION
 
