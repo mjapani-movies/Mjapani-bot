@@ -1,5 +1,5 @@
 {
-  "name": "levanter",
+  "name": "mjapani",
   "version": "6.2.0",
   "description": "Levanter — a powerful multi-session WhatsApp bot built on Baileys, with a plugin system, group moderation, media tools, and an API for sending and receiving messages via webhooks.",
   "keywords": [
@@ -24,9 +24,9 @@
   ],
   "main": "index.js",
   "scripts": {
-    "start": "pm2 start mjapani-start.js --attach --name levanter",
-   "docker": "pm2-runtime start mjapani-start.js --name levanter",
-    "stop": "pm2 stop levanter",
+    "start": "pm2 start mjapani-start.js --attach --name mjapani",
+   "docker": "pm2-runtime start mjapani-start.js --name mjapani",
+    "stop": "pm2 stop mjapani",
     "postinstall": "node -e \"try { require('sharp') } catch (e) { process.exit(1); }\" || yarn add --ignore-engines sharp@0.34.5"
   },
   "author": "",

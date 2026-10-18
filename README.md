@@ -33,7 +33,7 @@ git clone https://github.com/YOUR-USERNAME/YOUR-REPO.git bot && cd bot
 cp config.env.example config.env
 nano config.env          # paste your SESSION_ID
 yarn install
-npm start                # starts with pm2, name: levanter
+npm start                # starts with pm2, name: mjapani
 pm2 save && pm2 startup  # restart automatically after reboot
 ```
 
